@@ -2,7 +2,7 @@
   description = "Python 3.13 development environment for ML diffusion project";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     gitignore = {
       url = "github:hercules-ci/gitignore.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -27,9 +27,6 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      # Enable CUDA support for packages that need it
-      PASCAL = true;
-
       pkgsWithCuda =
         system:
         import nixpkgs {
@@ -38,13 +35,14 @@
             cudaSupport = true;
             allowUnfree = true; # CUDA packages are unfree
           };
+          overlays = [ torch-cu126.overlays.default ];
         };
 
       # Package definitions
       deploymentPythonPackages =
-        system: python-pkgs: with python-pkgs; [
+        system: pascal: python-pkgs: with python-pkgs; [
           # Deep Learning frameworks
-          (if PASCAL then torch-cu126.packages.${system}.torch-bin-cu126-pascal-py313-v210 else torch)
+          (if pascal then torch-bin-cu126-pascal-v210 else torch-bin)
           torchvision
 
           # Mamba and attention mechanisms (require CUDA support)
@@ -112,14 +110,13 @@
         system:
         let
           pkgs = pkgsWithCuda system;
-        in
-        {
-          default = pkgs.mkShell {
+
+          makeShell = pascal: pkgs.mkShell {
             packages =
               with pkgs;
               [
                 (python313.withPackages (
-                  python-pkgs: (deploymentPythonPackages system python-pkgs) ++ (devPythonPackages python-pkgs)
+                  python-pkgs: (deploymentPythonPackages system pascal python-pkgs) ++ (devPythonPackages python-pkgs)
                 ))
               ]
               ++ (deploymentPackages pkgs)
@@ -131,10 +128,13 @@
               echo "╚════════════════════════════════════════════════════════════╝"
               echo ""
               echo "Python version: $(python --version)"
-              echo "CUDA: ${pkgs.cudaPackages.cudatoolkit.version}"
+              echo "CUDA Toolkit: ${pkgs.cudaPackages.cudatoolkit.version}"
+              echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)' 2>/dev/null || echo 'N/A')"
+              echo "PyTorch CUDA: $(python -c 'import torch; print(torch.version.cuda if hasattr(torch.version, "cuda") else "N/A")' 2>/dev/null || echo 'N/A')"
+              echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'N/A')"
               echo ""
               echo "Packages installed:"
-              echo "  ✓ PyTorch with CUDA"
+              echo "  ✓ PyTorch with CUDA (${if pascal then "Pascal-optimized" else "Standard"})"
               echo "  ✓ mamba-ssm"
               echo "  ✓ flash-attn"
               echo "  ✓ causal-conv1d"
@@ -147,6 +147,10 @@
               export LD_LIBRARY_PATH="${pkgs.cudaPackages.cudatoolkit}/lib:${pkgs.cudaPackages.cudnn}/lib:$LD_LIBRARY_PATH"
             '';
           };
+        in
+        {
+          default = makeShell false;
+          pascal = makeShell true;
         }
       );
 
@@ -154,7 +158,7 @@
         system:
         let
           pkgs = pkgsWithCuda system;
-          python = pkgs.python313.withPackages (deploymentPythonPackages system);
+          python = pkgs.python313.withPackages (deploymentPythonPackages system false);
           inherit (gitignore.lib) gitignoreSource;
 
           # Filter source files using gitignore, plus exclude dot files, flake files, and result
