@@ -1,0 +1,40 @@
+Package Conflict Analysis
+=========================
+
+Date: Current build attempt with nixpkgs-unstable
+
+Conflict Description:
+--------------------
+Two versions of triton are being pulled into the Python environment, causing a collision:
+  - triton-3.5.1: /nix/store/gxmppnxj2n11w8plv8k8z8vg77h9jl5d-python3.13-triton-3.5.1
+  - triton-3.6.0: /nix/store/4kdyplmgxf33glyq6f0jzgm0hi160skg-python3.13-triton-3.6.0
+
+Root Cause:
+-----------
+triton-3.5.1 is pulled in by:
+  - python3.13-torch-2.9.1-dev (dependency of mamba-ssm from nixpkgs)
+  - python3.13-mamba-2.2.2
+
+triton-3.6.0 is pulled in by:
+  - python3.13-torch-2.10.0 (Pascal-optimized version from torch-cu126 overlay)
+  - Explicitly listed in deploymentPythonPackages
+
+Conflict Path:
+--------------
+1. flake.nix specifies torch-bin-cu126-pascal-v210 (when pascal==true)
+   → This provides torch-2.10.0 which depends on triton-3.6.0
+
+2. flake.nix also specifies mamba-ssm from nixpkgs-unstable
+   → mamba-ssm depends on torch-2.9.1-dev (standard nixpkgs torch)
+   → torch-2.9.1-dev depends on triton-3.5.1
+
+3. Both triton versions try to install to the same paths in site-packages
+   → buildEnv collision
+
+Resolution Options:
+-------------------
+1. Remove explicit 'triton' from package list (torch provides it)
+2. Override mamba-ssm to build against torch-2.10.0 instead of torch-2.9.1
+3. Use mamba-ssm from torch-cu126 overlay if available
+4. Build custom mamba-ssm against the Pascal torch version
+5. Revert to using standard torch-bin from nixpkgs instead of Pascal version

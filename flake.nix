@@ -28,21 +28,51 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
       pkgsWithCuda =
-        system:
+        system: pascal:
         import nixpkgs {
           inherit system;
           config = {
             cudaSupport = true;
             allowUnfree = true; # CUDA packages are unfree
           };
-          overlays = [ torch-cu126.overlays.default ];
+          overlays = [
+            torch-cu126.overlays.default
+            (final: prev: { cudaPackages = prev.cudaPackages_12_6; })
+            (final: prev: {
+              pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+                (python-final: python-prev:
+                let
+                  cudaCaps = if pascal then [ "6.1" ] else [ "7.5" "8.0" "8.6" "8.9" "9.0" ];
+                  torchBin = if pascal
+                    then python-final.torch-bin-cu126-pascal-v209
+                    else python-final.torch-bin-cu126-v209;
+                  cxxdev = final.runCommand "torch-bin-cxxdev" { } ''
+                    mkdir -p $out/include $out/share
+                    cp -r ${torchBin}/lib/python*/site-packages/torch/include/. $out/include/
+                    cp -r ${torchBin}/lib/python*/site-packages/torch/share/cmake $out/share/cmake 2>/dev/null || true
+                  '';
+                in {
+                  torch = torchBin.overrideAttrs (old: {
+                    passthru = (old.passthru or { }) // {
+                      cudaSupport = true;
+                      cudaPackages = final.cudaPackages_12_6;
+                      cudaCapabilities = cudaCaps;
+                      stdenv = final.cudaPackages_12_6.backendStdenv;
+                      inherit cxxdev;
+                    };
+                  });
+                  triton = python-prev.triton-bin;
+                })
+              ];
+            })
+          ];
         };
 
       # Package definitions
       deploymentPythonPackages =
-        system: pascal: python-pkgs: with python-pkgs; [
+        python-pkgs: with python-pkgs; [
           # Deep Learning frameworks
-          (if pascal then torch-bin-cu126-pascal-v210 else torch-bin)
+          torch
           torchvision
 
           # Mamba and attention mechanisms (require CUDA support)
@@ -59,9 +89,6 @@
           # Utilities
           tqdm
           einops
-
-          # Triton (for custom kernels)
-          triton
 
           # Visualization and logging
           matplotlib
@@ -109,14 +136,16 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = pkgsWithCuda system;
-
-          makeShell = pascal: pkgs.mkShell {
+          makeShell = pascal:
+            let
+              pkgs = pkgsWithCuda system pascal;
+            in
+            pkgs.mkShell {
             packages =
               with pkgs;
               [
                 (python313.withPackages (
-                  python-pkgs: (deploymentPythonPackages system pascal python-pkgs) ++ (devPythonPackages python-pkgs)
+                  python-pkgs: (deploymentPythonPackages python-pkgs) ++ (devPythonPackages python-pkgs)
                 ))
               ]
               ++ (deploymentPackages pkgs)
@@ -157,8 +186,8 @@
       packages = forAllSystems (
         system:
         let
-          pkgs = pkgsWithCuda system;
-          python = pkgs.python313.withPackages (deploymentPythonPackages system false);
+          pkgs = pkgsWithCuda system false;
+          python = pkgs.python313.withPackages deploymentPythonPackages;
           inherit (gitignore.lib) gitignoreSource;
 
           # Filter source files using gitignore, plus exclude dot files, flake files, and result
