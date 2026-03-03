@@ -2,11 +2,12 @@
   description = "Python 3.13 development environment for ML diffusion project";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     gitignore = {
       url = "github:hercules-ci/gitignore.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    torch-cu126.url = "github:sirati/nix-torch-bin-pascal";
   };
 
   outputs =
@@ -14,8 +15,10 @@
       self,
       nixpkgs,
       gitignore,
+      torch-cu126,
     }:
     let
+      # Support multiple systems
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -24,49 +27,70 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      pkgsFor =
-        system:
+      pkgsWithCuda =
+        system: pascal:
         import nixpkgs {
           inherit system;
           config = {
             cudaSupport = true;
-            allowUnfree = true;
+            allowUnfree = true; # CUDA packages are unfree
           };
           overlays = [
+            torch-cu126.overlays.default
+            (final: prev: { cudaPackages = prev.cudaPackages_12_6; })
             (final: prev: {
               pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-                (python-final: python-prev: {
-                  torch = python-prev.torch-bin.overrideAttrs (old: {
+                (python-final: python-prev:
+                let
+                  cudaCaps = if pascal then [ "6.1" ] else [ "7.5" "8.0" "8.6" "8.9" "9.0" ];
+                  torchBin = if pascal
+                    then python-final.torch-bin-cu126-pascal-v209
+                    else python-final.torch-bin-cu126-v209;
+                  cxxdev = final.runCommand "torch-bin-cxxdev" { } ''
+                    mkdir -p $out/include $out/share
+                    cp -r ${torchBin}/lib/python*/site-packages/torch/include/. $out/include/
+                    cp -r ${torchBin}/lib/python*/site-packages/torch/share/cmake $out/share/cmake 2>/dev/null || true
+                  '';
+                in {
+                  torch = torchBin.overrideAttrs (old: {
                     passthru = (old.passthru or { }) // {
                       cudaSupport = true;
-                      cudaPackages = final.cudaPackages;
-                      cudaCapabilities = python-prev.torch.cudaCapabilities;
+                      cudaPackages = final.cudaPackages_12_6;
+                      cudaCapabilities = cudaCaps;
+                      stdenv = final.cudaPackages_12_6.backendStdenv;
+                      inherit cxxdev;
                     };
                   });
-                  torchvision = python-prev.torchvision-bin;
+                  triton = python-prev.triton-bin;
                 })
               ];
             })
           ];
         };
 
+      # Package definitions
       deploymentPythonPackages =
         python-pkgs: with python-pkgs; [
+          # Deep Learning frameworks
           torch
           torchvision
 
-          # mamba-ssm depends on outdata torch 2.9.1 i dont think we will use its as we just use flash-attn 3.0
-          # flash-attn
-          # causal-conv1d
+          # Mamba and attention mechanisms (require CUDA support)
+          mamba-ssm
+          flash-attn
+          causal-conv1d
 
+          # Core ML packages
           numpy
           pandas
           scipy
           scikit-learn
 
+          # Utilities
           tqdm
           einops
 
+          # Visualization and logging
           matplotlib
           tensorboard
           wandb
@@ -81,8 +105,15 @@
       deploymentPackages =
         pkgs: with pkgs; [
           openssl
+
+          # CUDA support (for NVIDIA GPUs)
           cudaPackages.cudatoolkit
           cudaPackages.cudnn
+
+          # Build tools needed for pip packages (mamba-ssm, flash-attn)
+          # gcc
+          # cmake
+          # ninja
         ];
 
       dockerOnlyPackages =
@@ -105,13 +136,15 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = pkgsFor system;
-        in
-        {
-          default = pkgs.mkShell {
+          makeShell = pascal:
+            let
+              pkgs = pkgsWithCuda system pascal;
+            in
+            pkgs.mkShell {
             packages =
+              with pkgs;
               [
-                (pkgs.python313.withPackages (
+                (python313.withPackages (
                   python-pkgs: (deploymentPythonPackages python-pkgs) ++ (devPythonPackages python-pkgs)
                 ))
               ]
@@ -130,7 +163,11 @@
               echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())' 2>/dev/null || echo 'N/A')"
               echo ""
               echo "Packages installed:"
-              echo "  ✓ PyTorch (torch-bin)"
+              echo "  ✓ PyTorch with CUDA (${if pascal then "Pascal-optimized" else "Standard"})"
+              echo "  ✓ mamba-ssm"
+              echo "  ✓ flash-attn"
+              echo "  ✓ causal-conv1d"
+              echo "  ✓ triton"
               echo ""
               echo "Ready to train!"
               export bin_python=$(which python)
@@ -139,16 +176,21 @@
               export LD_LIBRARY_PATH="${pkgs.cudaPackages.cudatoolkit}/lib:${pkgs.cudaPackages.cudnn}/lib:$LD_LIBRARY_PATH"
             '';
           };
+        in
+        {
+          default = makeShell false;
+          pascal = makeShell true;
         }
       );
 
       packages = forAllSystems (
         system:
         let
-          pkgs = pkgsFor system;
+          pkgs = pkgsWithCuda system false;
           python = pkgs.python313.withPackages deploymentPythonPackages;
           inherit (gitignore.lib) gitignoreSource;
 
+          # Filter source files using gitignore, plus exclude dot files, flake files, and result
           projectSource = pkgs.lib.cleanSourceWith {
             src = gitignoreSource ./.;
             filter =
@@ -156,13 +198,18 @@
               let
                 baseName = baseNameOf path;
               in
+              # Exclude dot files and directories
               !(pkgs.lib.hasPrefix "." baseName)
-              && baseName != "flake.nix"
-              && baseName != "flake-with-overlay.nix"
+              &&
+                # Exclude flake files
+                baseName != "flake.nix"
               && baseName != "flake.lock"
-              && baseName != "result";
+              &&
+                # Exclude nix build results
+                baseName != "result";
           };
 
+          # Create a derivation that contains the project files
           projectFiles = pkgs.runCommand "ml-diffusion-source" { } ''
             mkdir -p $out/app
             cp -r ${projectSource}/. $out/app/
