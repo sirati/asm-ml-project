@@ -7,6 +7,8 @@
       url = "github:hercules-ci/gitignore.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    torch-bin.url = "github:sirati/nix-torch-bin-pascal/feature-py-version-resolve";
+    torch-bin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -14,6 +16,7 @@
       self,
       nixpkgs,
       gitignore,
+      torch-bin,
     }:
     let
       systems = [
@@ -24,59 +27,55 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
+      torchPackages = torch-bin.pytorch-packages;
+
       pkgsFor =
         system:
         import nixpkgs {
           inherit system;
           config = {
-            cudaSupport = true;
             allowUnfree = true;
           };
-          overlays = [
-            (final: prev: {
-              pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-                (python-final: python-prev: {
-                  torch = python-prev.torch-bin.overrideAttrs (old: {
-                    passthru = (old.passthru or { }) // {
-                      cudaSupport = true;
-                      cudaPackages = final.cudaPackages;
-                      cudaCapabilities = python-prev.torch.cudaCapabilities;
-                    };
-                  });
-                  torchvision = python-prev.torchvision-bin;
-                })
-              ];
-            })
-          ];
         };
 
-      deploymentPythonPackages =
-        python-pkgs: with python-pkgs; [
-          torch
-          torchvision
+      mlResultFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        torchPackages.concretise {
+          inherit pkgs;
+          mlPackages = with torchPackages; [ torch ];
+          python = "3.13";
+          cuda = "12.8";
+          torch = "2.10";
+          pascal = false;
+          allowBuildingFromSource = true;
+          extraPythonPackages =
+            ps: with ps; [
+              numpy
+              pandas
+              scipy
+              scikit-learn
+              tqdm
+              einops
+              matplotlib
+              tensorboard
+            ];
+        };
 
-          # mamba-ssm depends on outdata torch 2.9.1 i dont think we will use its as we just use flash-attn 3.0
-          # flash-attn
-          # causal-conv1d
-
-          numpy
-          pandas
-          scipy
-          scikit-learn
-
-          tqdm
-          einops
-
-          matplotlib
-          tensorboard
-          wandb
-        ];
-
-      devPythonPackages =
-        python-pkgs: with python-pkgs; [
-          pip
-          ruff
-        ];
+      # wandb has torchvision as a nativeBuildInput (test dep). nixpkgs's source-built
+      # torchvision tries to inherit cudaSupport from torch, which torch-bin's torch does
+      # not carry. We use overrideScope inside extendEnv so that torchvision resolves to
+      # torchvision-bin within the same concretise-augmented package set — meaning
+      # torchvision-bin's torch dep resolves to torch 2.10 from concretise, not the
+      # nixpkgs torch 2.9.1.
+      withWandb =
+        ps:
+        let
+          ps' = ps.overrideScope (_: prev: { torchvision = prev.torchvision-bin; });
+        in
+        [ ps'.wandb ];
 
       deploymentPackages =
         pkgs: with pkgs; [
@@ -106,17 +105,22 @@
         system:
         let
           pkgs = pkgsFor system;
+          devEnv = (mlResultFor system).extendEnv (
+            ps:
+            let
+              ps' = ps.overrideScope (_: prev: { torchvision = prev.torchvision-bin; });
+            in
+            with ps';
+            [
+              pip
+              ruff
+              wandb
+            ]
+          );
         in
         {
           default = pkgs.mkShell {
-            packages =
-              [
-                (pkgs.python313.withPackages (
-                  python-pkgs: (deploymentPythonPackages python-pkgs) ++ (devPythonPackages python-pkgs)
-                ))
-              ]
-              ++ (deploymentPackages pkgs)
-              ++ (devPackages pkgs);
+            packages = [ devEnv ] ++ (deploymentPackages pkgs) ++ (devPackages pkgs);
 
             shellHook = ''
               echo "╔════════════════════════════════════════════════════════════╗"
@@ -146,7 +150,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          python = pkgs.python313.withPackages deploymentPythonPackages;
+          deploymentEnv = (mlResultFor system).extendEnv withWandb;
           inherit (gitignore.lib) gitignoreSource;
 
           projectSource = pkgs.lib.cleanSourceWith {
@@ -175,7 +179,7 @@
             tag = "latest";
 
             contents = [
-              python
+              deploymentEnv
               projectFiles
             ]
             ++ (deploymentPackages pkgs)
@@ -183,7 +187,7 @@
 
             config = {
               Entrypoint = [
-                "${python}/bin/python"
+                "${deploymentEnv}/bin/python"
                 "-m"
               ];
               WorkingDir = "/app";

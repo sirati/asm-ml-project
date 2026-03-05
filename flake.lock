@@ -22,11 +22,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1772465433,
-        "narHash": "sha256-ywy9troNEfpgh0Ee+zaV1UTgU8kYBVKtvPSxh6clYGU=",
+        "lastModified": 1771177547,
+        "narHash": "sha256-trTtk3WTOHz7hSw89xIIvahkgoFJYQ0G43IlqprFoMA=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "c581273b8d5bdf1c6ce7e0a54da9841e6a763913",
+        "rev": "ac055f38c798b0d87695240c7b761b82fc7e5bc2",
         "type": "github"
       },
       "original": {
@@ -39,7 +39,29 @@
     "root": {
       "inputs": {
         "gitignore": "gitignore",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "torch-bin": "torch-bin"
+      }
+    },
+    "torch-bin": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1772746849,
+        "narHash": "sha256-ZdafxdhlCzSlgKD10XyhgJo86yjxVhC5qJtZ2CPe9n8=",
+        "owner": "sirati",
+        "repo": "nix-torch-bin-pascal",
+        "rev": "3e0f169f3d2ff37eb6ea73e7c8a7ff137e0905ea",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sirati",
+        "ref": "feature-py-version-resolve",
+        "repo": "nix-torch-bin-pascal",
+        "type": "github"
       }
     }
   },
