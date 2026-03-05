@@ -45,7 +45,11 @@
         in
         torchPackages.concretise {
           inherit pkgs;
-          mlPackages = with torchPackages; [ torch ];
+          mlPackages = with torchPackages; [
+            torch
+            flash-attn
+            mamba-ssm
+          ];
           python = "3.13";
           cuda = "12.8";
           torch = "2.10";
@@ -58,7 +62,6 @@
               scipy
               scikit-learn
               tqdm
-              einops
               matplotlib
               tensorboard
             ];
@@ -107,7 +110,7 @@
           pkgs = pkgsFor system;
           devEnv = (mlResultFor system).extendEnv (
             ps:
-            let
+            let # todo this is dublicated with withWandb, lets merge that code path
               ps' = ps.overrideScope (_: prev: { torchvision = prev.torchvision-bin; });
             in
             with ps';

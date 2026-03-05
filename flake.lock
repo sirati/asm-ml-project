@@ -50,11 +50,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1772746849,
-        "narHash": "sha256-ZdafxdhlCzSlgKD10XyhgJo86yjxVhC5qJtZ2CPe9n8=",
+        "lastModified": 1772747657,
+        "narHash": "sha256-WmofmV6CvoVtZi4dI3PHH4JcIxQmpgIk11XvmsMXSCw=",
         "owner": "sirati",
         "repo": "nix-torch-bin-pascal",
-        "rev": "3e0f169f3d2ff37eb6ea73e7c8a7ff137e0905ea",
+        "rev": "e70e07178470e7f3ba991a59f76ac45e47fbb454",
         "type": "github"
       },
       "original": {
