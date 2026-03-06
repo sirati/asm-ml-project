@@ -18,19 +18,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.layers import (
+from model.layers_pkg import (
+    CrossSequenceLayer,
     LayerBackend,
     LayerConfig,
     SequenceLayer,
-    CrossSequenceLayer,
-    make_self_layer,
     make_cross_layer,
+    make_self_layer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Embeddings and normalization
 # ---------------------------------------------------------------------------
+
 
 class LayerNorm(nn.Module):
     def __init__(self, dim: int):
@@ -57,15 +57,21 @@ class TimestepEmbedder(nn.Module):
         self.frequency_embedding_size = frequency_embedding_size
 
     @staticmethod
-    def timestep_embedding(t: torch.Tensor, dim: int, max_period: float = 10000.0) -> torch.Tensor:
+    def timestep_embedding(
+        t: torch.Tensor, dim: int, max_period: float = 10000.0
+    ) -> torch.Tensor:
         half = dim // 2
         freqs = torch.exp(
-            -math.log(max_period) * torch.arange(half, dtype=torch.float32, device=t.device) / half
+            -math.log(max_period)
+            * torch.arange(half, dtype=torch.float32, device=t.device)
+            / half
         )
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
+            )
         return embedding
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
@@ -86,6 +92,7 @@ class EmbeddingLayer(nn.Module):
 # ---------------------------------------------------------------------------
 # Conditioning injection layer
 # ---------------------------------------------------------------------------
+
 
 class ConditionedLayer(nn.Module):
     """Wraps a SequenceLayer with adaptive layer norm conditioning.
@@ -119,7 +126,9 @@ class ConditionedCrossLayer(nn.Module):
         self.adaLN_modulation.bias.data.zero_()
         self.norm = LayerNorm(d_q)
 
-    def forward(self, x_q: torch.Tensor, x_kv: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x_q: torch.Tensor, x_kv: torch.Tensor, c: torch.Tensor
+    ) -> torch.Tensor:
         shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
         q_mod = self.norm(x_q) * (1 + scale) + shift
         return x_q + self.layer(q_mod, x_kv)
@@ -128,6 +137,7 @@ class ConditionedCrossLayer(nn.Module):
 # ---------------------------------------------------------------------------
 # Output layer
 # ---------------------------------------------------------------------------
+
 
 class FinalLayer(nn.Module):
     def __init__(self, hidden_size: int, out_channels: int, cond_dim: int):
@@ -151,6 +161,7 @@ class FinalLayer(nn.Module):
 # Config
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BackboneConfig:
     hidden_size: int = 768
@@ -161,15 +172,25 @@ class BackboneConfig:
 
     # Encoder
     encoder_layers: int = 10
-    encoder_layer_config: LayerConfig = field(default_factory=lambda: LayerConfig(
-        backend=LayerBackend.ATTN, num_heads=12, dropout=0.1, widening_factor=4,
-    ))
+    encoder_layer_config: LayerConfig = field(
+        default_factory=lambda: LayerConfig(
+            backend=LayerBackend.ATTN,
+            num_heads=12,
+            dropout=0.1,
+            widening_factor=4,
+        )
+    )
 
     # Decoder
     decoder_layers: int = 4
-    decoder_layer_config: LayerConfig = field(default_factory=lambda: LayerConfig(
-        backend=LayerBackend.ATTN, num_heads=12, dropout=0.1, widening_factor=4,
-    ))
+    decoder_layer_config: LayerConfig = field(
+        default_factory=lambda: LayerConfig(
+            backend=LayerBackend.ATTN,
+            num_heads=12,
+            dropout=0.1,
+            widening_factor=4,
+        )
+    )
 
     # How many top encoder layers the decoder cross-attends to.
     # e.g. encoder_cross_layers=2 means the bottom 2 decoder layers
@@ -180,6 +201,7 @@ class BackboneConfig:
 # ---------------------------------------------------------------------------
 # Full backbone
 # ---------------------------------------------------------------------------
+
 
 class DiffusionBackbone(nn.Module):
     """Encoder-decoder backbone for edit diffusion.
@@ -210,23 +232,43 @@ class DiffusionBackbone(nn.Module):
         self.sigma_map = TimestepEmbedder(config.cond_dim)
 
         # Encoder layers
-        self.encoder_layers = nn.ModuleList([
-            ConditionedLayer(dim, config.cond_dim, make_self_layer(dim, config.encoder_layer_config))
-            for _ in range(config.encoder_layers)
-        ])
+        self.encoder_layers = nn.ModuleList(
+            [
+                ConditionedLayer(
+                    dim,
+                    config.cond_dim,
+                    make_self_layer(dim, config.encoder_layer_config),
+                )
+                for _ in range(config.encoder_layers)
+            ]
+        )
 
         # Decoder self-attention layers
-        self.decoder_self_layers = nn.ModuleList([
-            ConditionedLayer(dim, config.cond_dim, make_self_layer(dim, config.decoder_layer_config))
-            for _ in range(config.decoder_layers)
-        ])
+        self.decoder_self_layers = nn.ModuleList(
+            [
+                ConditionedLayer(
+                    dim,
+                    config.cond_dim,
+                    make_self_layer(dim, config.decoder_layer_config),
+                )
+                for _ in range(config.decoder_layers)
+            ]
+        )
 
         # Decoder cross-attention layers (for the bottom `encoder_cross_layers` decoder layers)
-        n_cross = min(config.encoder_cross_layers, config.decoder_layers, config.encoder_layers)
-        self.decoder_cross_layers = nn.ModuleList([
-            ConditionedCrossLayer(dim, config.cond_dim, make_cross_layer(dim, dim, config.decoder_layer_config))
-            for _ in range(n_cross)
-        ])
+        n_cross = min(
+            config.encoder_cross_layers, config.decoder_layers, config.encoder_layers
+        )
+        self.decoder_cross_layers = nn.ModuleList(
+            [
+                ConditionedCrossLayer(
+                    dim,
+                    config.cond_dim,
+                    make_cross_layer(dim, dim, config.decoder_layer_config),
+                )
+                for _ in range(n_cross)
+            ]
+        )
         self.n_cross = n_cross
 
         self.output_layer = FinalLayer(dim, vocab_size, config.cond_dim)
@@ -248,7 +290,7 @@ class DiffusionBackbone(nn.Module):
     ) -> torch.Tensor:
         """Run decoder with cross-attention to top encoder layers."""
         # The top `n_cross` encoder outputs, ordered from deepest to shallowest
-        top_encoder = encoder_hidden[-self.n_cross:]
+        top_encoder = encoder_hidden[-self.n_cross :]
 
         for i, self_layer in enumerate(self.decoder_self_layers):
             x = self_layer(x, c)
@@ -275,10 +317,14 @@ class DiffusionBackbone(nn.Module):
             )
             x_out = x_out - esigm1_log - np.log(x_out.shape[-1] - 1)
 
-        x_out = torch.scatter(x_out, -1, indices[..., None], torch.zeros_like(x_out[..., :1]))
+        x_out = torch.scatter(
+            x_out, -1, indices[..., None], torch.zeros_like(x_out[..., :1])
+        )
         return x_out
 
-    def forward_hidden(self, indices: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+    def forward_hidden(
+        self, indices: torch.Tensor, sigma: torch.Tensor
+    ) -> torch.Tensor:
         """Forward pass returning decoder hidden states (before output head).
 
         Useful for downstream heads (tagger, specialists).

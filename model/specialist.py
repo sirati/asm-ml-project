@@ -14,17 +14,17 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from model.layers import (
+from model.layers_pkg import (
     LayerBackend,
     LayerConfig,
-    make_self_layer,
     make_cross_layer,
+    make_self_layer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Learnable latent array (from perceiver-io TrainableQueryProvider)
 # ---------------------------------------------------------------------------
+
 
 class TrainableLatentArray(nn.Module):
     """Learnable latent array used as queries in Perceiver-IO encoder."""
@@ -48,6 +48,7 @@ class TrainableLatentArray(nn.Module):
 # Config
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SpecialistConfig:
     num_latents: int = 64
@@ -55,18 +56,29 @@ class SpecialistConfig:
     num_self_attention_layers: int = 6
     init_scale: float = 0.02
 
-    cross_attn_config: LayerConfig = field(default_factory=lambda: LayerConfig(
-        backend=LayerBackend.ATTN, num_heads=4, dropout=0.0, widening_factor=1,
-    ))
+    cross_attn_config: LayerConfig = field(
+        default_factory=lambda: LayerConfig(
+            backend=LayerBackend.ATTN,
+            num_heads=4,
+            dropout=0.0,
+            widening_factor=1,
+        )
+    )
 
-    self_attn_config: LayerConfig = field(default_factory=lambda: LayerConfig(
-        backend=LayerBackend.ATTN, num_heads=4, dropout=0.0, widening_factor=1,
-    ))
+    self_attn_config: LayerConfig = field(
+        default_factory=lambda: LayerConfig(
+            backend=LayerBackend.ATTN,
+            num_heads=4,
+            dropout=0.0,
+            widening_factor=1,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
 # Perceiver-IO Specialist
 # ---------------------------------------------------------------------------
+
 
 class PerceiverSpecialist(nn.Module):
     """Perceiver-IO specialist for handling a class of edit operations.
@@ -97,18 +109,24 @@ class PerceiverSpecialist(nn.Module):
 
         # Encoder: cross-attend from latents to input
         self.encoder_cross_attn = make_cross_layer(
-            d_q=d_latent, d_kv=input_channels, config=config.cross_attn_config,
+            d_q=d_latent,
+            d_kv=input_channels,
+            config=config.cross_attn_config,
         )
 
         # Self-attention block on latents
-        self.self_attn_layers = nn.ModuleList([
-            make_self_layer(d_latent, config.self_attn_config)
-            for _ in range(config.num_self_attention_layers)
-        ])
+        self.self_attn_layers = nn.ModuleList(
+            [
+                make_self_layer(d_latent, config.self_attn_config)
+                for _ in range(config.num_self_attention_layers)
+            ]
+        )
 
         # Decoder: cross-attend from output queries back to latents
         self.decoder_cross_attn = make_cross_layer(
-            d_q=input_channels, d_kv=d_latent, config=config.cross_attn_config,
+            d_q=input_channels,
+            d_kv=d_latent,
+            config=config.cross_attn_config,
         )
 
         # Project to output dimension if needed
